@@ -1,291 +1,225 @@
-import { useState } from 'react';
-import axios from '../api/axios';
-import ShowcaseCard from './ShowcaseCard';
+import { useState, useEffect } from 'react';
+import axios from '../../api/axios';
+import { useAuth } from '../../context/AuthContext';
+import PortfolioManager from '../../components/PortfolioManager';
 
-const EMPTY_FORM = {
-  skill: '',
-  type: 'project',
-  title: '',
-  url: '',
-  description: '',
-  credential: '',
-};
+const Profile = () => {
+  const { user, login } = useAuth();
+  const [formData, setFormData] = useState({
+    name: '',
+    bio: '',
+    location: '',
+    skillsOffered: '',
+    skillsWanted: '',
+  });
+  // Saved copies, used by the portfolio manager
+  const [portfolio, setPortfolio] = useState([]);
+  const [savedSkills, setSavedSkills] = useState([]);
 
-// Same rule as the backend: only real http(s) addresses
-const isValidHttpUrl = (value) => {
-  try {
-    const url = new URL(value.trim());
-    return ['http:', 'https:'].includes(url.protocol) && url.hostname.includes('.');
-  } catch {
-    return false;
-  }
-};
-
-const PortfolioManager = ({ skills, items, onItemsChange }) => {
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [editingId, setEditingId] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        const { data } = await axios.get('/users/profile');
+        setFormData({
+          name: data.name || '',
+          bio: data.bio || '',
+          location: data.location || '',
+          skillsOffered: (data.skillsOffered || []).join(', '),
+          skillsWanted: (data.skillsWanted || []).join(', '),
+        });
+        setPortfolio(data.portfolio || []);
+        setSavedSkills(data.skillsOffered || []);
+      } catch (err) {
+        setError('Could not load your profile. Refresh the page to try again.');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchProfile();
+  }, []);
 
   const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
-    setError('');
-    setSuccess('');
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+    setSuccess(false);
   };
 
-  const resetForm = () => {
-    setForm(EMPTY_FORM);
-    setEditingId(null);
-  };
+  const toList = (text) =>
+    text
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    setSuccess('');
-
-    if (!editingId && !form.skill) {
-      return setError('Choose the skill this work sample belongs to');
-    }
-    if (!form.title.trim()) {
-      return setError('Add a title for this work sample');
-    }
-    if (!isValidHttpUrl(form.url)) {
-      return setError('Enter a valid web address starting with http:// or https://');
-    }
-
     setSaving(true);
+
     try {
-      let data;
-      if (editingId) {
-        const { skill, ...updates } = form; // skill can't change when editing
-        ({ data } = await axios.put(`/users/portfolio/${editingId}`, updates));
-      } else {
-        ({ data } = await axios.post('/users/portfolio', form));
-      }
-      onItemsChange(data.portfolio);
-      setSuccess(editingId ? 'Work sample updated' : 'Work sample added');
-      resetForm();
+      const payload = {
+        name: formData.name,
+        bio: formData.bio,
+        location: formData.location,
+        skillsOffered: toList(formData.skillsOffered),
+        skillsWanted: toList(formData.skillsWanted),
+      };
+
+      const { data } = await axios.put('/users/profile', payload);
+
+      // Keep AuthContext + localStorage fresh (existing token is kept)
+      login({ ...user, ...data });
+
+      // Portfolio items for removed skills are deleted by the backend
+      setPortfolio(data.portfolio || []);
+      setSavedSkills(data.skillsOffered || []);
+
+      setSuccess(true);
     } catch (err) {
-      setError(err.response?.data?.message || 'Could not save this work sample. Try again.');
+      setError(err.response?.data?.message || 'Could not save your profile. Try again.');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleEdit = (item) => {
-    setForm({
-      skill: item.skill,
-      type: item.type,
-      title: item.title,
-      url: item.url,
-      description: item.description || '',
-      credential: item.credential || '',
-    });
-    setEditingId(item._id);
-    setError('');
-    setSuccess('');
-  };
-
-  const handleDelete = async (item) => {
-    if (!window.confirm(`Remove "${item.title}" from your showcase?`)) return;
-    setError('');
-    setSuccess('');
-    try {
-      const { data } = await axios.delete(`/users/portfolio/${item._id}`);
-      onItemsChange(data.portfolio);
-      if (editingId === item._id) resetForm();
-      setSuccess('Work sample removed');
-    } catch (err) {
-      setError(err.response?.data?.message || 'Could not remove this work sample. Try again.');
-    }
-  };
-
-  const itemsForSkill = (skill) =>
-    items.filter((i) => i.skill.toLowerCase() === skill.toLowerCase());
+  if (loading) return <div style={styles.container}>Loading profile...</div>;
 
   return (
-    <div style={styles.card}>
-      <h2 style={styles.heading}>Portfolio and work showcase</h2>
-      <p style={styles.subheading}>
-        Link real work for each skill you offer. Profiles with work samples appear first in
-        search and get a showcase badge.
-      </p>
-
-      {error && <div style={styles.error}>{error}</div>}
-      {success && <div style={styles.success}>✅ {success}</div>}
-
-      {skills.length === 0 ? (
-        <div style={styles.info}>
-          Add skills under "Skills you offer" and save your profile. Then you can attach work
-          samples to each one here.
+    <div style={styles.container}>
+      <div style={styles.card}>
+        <div style={styles.header}>
+          <div style={styles.avatar}>{formData.name.charAt(0).toUpperCase()}</div>
+          <div>
+            <h1 style={styles.title}>{formData.name}</h1>
+            <p style={styles.credits}>⭐ {user?.credits} credits</p>
+          </div>
         </div>
-      ) : (
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <div style={styles.row}>
-            <div style={styles.field}>
-              <label style={styles.label}>Skill</label>
-              <select
-                name="skill"
-                value={form.skill}
-                onChange={handleChange}
-                style={styles.input}
-                disabled={Boolean(editingId)}
-              >
-                <option value="">Choose a skill</option>
-                {skills.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
 
-            <div style={styles.field}>
-              <label style={styles.label}>Type</label>
-              <select name="type" value={form.type} onChange={handleChange} style={styles.input}>
-                <option value="project">Project</option>
-                <option value="certificate">Certificate</option>
-                <option value="portfolio">Portfolio</option>
-              </select>
-            </div>
-          </div>
+        {error && <div style={styles.error}>{error}</div>}
+        {success && <div style={styles.success}>✅ Profile updated successfully!</div>}
 
-          <div style={styles.field}>
-            <label style={styles.label}>Title</label>
+        <form onSubmit={handleSubmit}>
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Name</label>
             <input
               type="text"
-              name="title"
-              value={form.title}
+              name="name"
+              value={formData.name}
               onChange={handleChange}
-              placeholder="e.g. SkillSwap, AI skill-exchange app"
-              maxLength={100}
               style={styles.input}
+              required
             />
           </div>
 
-          <div style={styles.field}>
-            <label style={styles.label}>Link</label>
-            <input
-              type="text"
-              inputMode="url"
-              name="url"
-              value={form.url}
-              onChange={handleChange}
-              placeholder="https://github.com/your-name/your-project"
-              maxLength={500}
-              style={styles.input}
-            />
-          </div>
-
-          <div style={styles.field}>
-            <label style={styles.label}>Description (optional)</label>
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Bio</label>
             <textarea
-              name="description"
-              value={form.description}
+              name="bio"
+              value={formData.bio}
               onChange={handleChange}
-              placeholder="What did you build or achieve? What should a learner know?"
-              maxLength={500}
+              placeholder="Tell others a bit about yourself..."
+              style={styles.textarea}
               rows={3}
-              style={{ ...styles.input, resize: 'vertical', fontFamily: 'inherit' }}
             />
           </div>
 
-          <div style={styles.field}>
-            <label style={styles.label}>Credential (optional)</label>
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Location</label>
             <input
               type="text"
-              name="credential"
-              value={form.credential}
+              name="location"
+              value={formData.location}
               onChange={handleChange}
-              placeholder="e.g. Meta Front-End Developer Certificate, 2025"
-              maxLength={150}
+              placeholder="e.g. Jaipur, Rajasthan"
               style={styles.input}
             />
           </div>
 
-          <div style={styles.buttonRow}>
-            <button type="submit" style={styles.primaryBtn} disabled={saving}>
-              {saving ? 'Saving...' : editingId ? 'Save changes' : 'Add work sample'}
-            </button>
-            {editingId && (
-              <button type="button" style={styles.secondaryBtn} onClick={resetForm}>
-                Cancel edit
-              </button>
-            )}
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Skills you offer (comma separated)</label>
+            <input
+              type="text"
+              name="skillsOffered"
+              value={formData.skillsOffered}
+              onChange={handleChange}
+              placeholder="e.g. JavaScript, Node.js, MongoDB"
+              style={styles.input}
+            />
+            <p style={styles.hint}>
+              Save your profile, then link work samples for each skill in the showcase below.
+            </p>
           </div>
+
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Skills you want to learn (comma separated)</label>
+            <input
+              type="text"
+              name="skillsWanted"
+              value={formData.skillsWanted}
+              onChange={handleChange}
+              placeholder="e.g. Guitar, Spanish, UI Design"
+              style={styles.input}
+            />
+            <p style={styles.hint}>Separate multiple skills with commas</p>
+          </div>
+
+          <button
+            type="submit"
+            style={saving ? { ...styles.button, opacity: 0.7 } : styles.button}
+            disabled={saving}
+          >
+            {saving ? 'Saving...' : 'Save changes'}
+          </button>
         </form>
-      )}
+      </div>
 
-      {skills.length > 0 && (
-        <div style={styles.groups}>
-          {skills.map((skill) => {
-            const list = itemsForSkill(skill);
-            return (
-              <div key={skill} style={styles.group}>
-                <div style={styles.groupHeader}>
-                  <h3 style={styles.groupTitle}>{skill}</h3>
-                  {list.length > 0 ? (
-                    <span style={styles.badge}>🏅 Showcase · {list.length}</span>
-                  ) : (
-                    <span style={styles.noEvidence}>No work samples yet</span>
-                  )}
-                </div>
-
-                <div style={styles.cardList}>
-                  {list.map((item) => (
-                    <ShowcaseCard
-                      key={item._id}
-                      item={item}
-                      actions={
-                        <>
-                          <button
-                            type="button"
-                            style={styles.smallBtn}
-                            onClick={() => handleEdit(item)}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            style={styles.smallDangerBtn}
-                            onClick={() => handleDelete(item)}
-                          >
-                            Remove
-                          </button>
-                        </>
-                      }
-                    />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      <PortfolioManager skills={savedSkills} items={portfolio} onItemsChange={setPortfolio} />
     </div>
   );
 };
 
 const styles = {
+  container: {
+    maxWidth: '700px',
+    margin: '0 auto',
+    padding: '32px 24px',
+  },
   card: {
     backgroundColor: 'white',
     borderRadius: '12px',
     padding: '32px',
     boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
-    marginTop: '24px',
   },
-  heading: {
-    fontSize: '20px',
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '16px',
+    marginBottom: '24px',
+  },
+  avatar: {
+    width: '64px',
+    height: '64px',
+    borderRadius: '50%',
+    backgroundColor: '#6c63ff',
+    color: 'white',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '26px',
+    fontWeight: 'bold',
+  },
+  title: {
+    fontSize: '22px',
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: '6px',
   },
-  subheading: {
+  credits: {
     fontSize: '14px',
-    color: '#777',
-    lineHeight: 1.5,
-    marginBottom: '20px',
+    color: '#888',
+    marginTop: '4px',
   },
   error: {
     backgroundColor: '#ffe0e0',
@@ -303,26 +237,8 @@ const styles = {
     marginBottom: '16px',
     fontSize: '14px',
   },
-  info: {
-    backgroundColor: '#f0effe',
-    color: '#4b44c9',
-    padding: '14px',
-    borderRadius: '8px',
-    fontSize: '14px',
-    lineHeight: 1.5,
-  },
-  form: {
-    marginBottom: '8px',
-  },
-  row: {
-    display: 'flex',
-    gap: '12px',
-    flexWrap: 'wrap',
-  },
-  field: {
-    flex: 1,
-    minWidth: '160px',
-    marginBottom: '16px',
+  formGroup: {
+    marginBottom: '18px',
   },
   label: {
     display: 'block',
@@ -333,95 +249,39 @@ const styles = {
   },
   input: {
     width: '100%',
-    padding: '11px 12px',
+    padding: '12px',
     borderRadius: '8px',
     border: '1px solid #ddd',
     fontSize: '14px',
     boxSizing: 'border-box',
-    backgroundColor: 'white',
   },
-  buttonRow: {
-    display: 'flex',
-    gap: '10px',
-    flexWrap: 'wrap',
+  textarea: {
+    width: '100%',
+    padding: '12px',
+    borderRadius: '8px',
+    border: '1px solid #ddd',
+    fontSize: '14px',
+    fontFamily: 'inherit',
+    boxSizing: 'border-box',
+    resize: 'vertical',
   },
-  primaryBtn: {
-    padding: '12px 24px',
+  hint: {
+    fontSize: '12px',
+    color: '#999',
+    marginTop: '4px',
+  },
+  button: {
+    width: '100%',
+    padding: '14px',
     backgroundColor: '#6c63ff',
     color: 'white',
     border: 'none',
     borderRadius: '8px',
-    fontSize: '15px',
-    fontWeight: '600',
-    cursor: 'pointer',
-  },
-  secondaryBtn: {
-    padding: '12px 24px',
-    backgroundColor: 'transparent',
-    color: '#6c63ff',
-    border: '1px solid #6c63ff',
-    borderRadius: '8px',
-    fontSize: '15px',
-    fontWeight: '600',
-    cursor: 'pointer',
-  },
-  groups: {
-    marginTop: '24px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '20px',
-  },
-  group: {
-    borderTop: '1px solid #f0f0f0',
-    paddingTop: '16px',
-  },
-  groupHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    flexWrap: 'wrap',
-    marginBottom: '10px',
-  },
-  groupTitle: {
     fontSize: '16px',
-    fontWeight: '700',
-    color: '#333',
-  },
-  badge: {
-    backgroundColor: '#fff4d6',
-    color: '#8a5a00',
-    fontSize: '12px',
-    fontWeight: '700',
-    padding: '3px 10px',
-    borderRadius: '20px',
-  },
-  noEvidence: {
-    fontSize: '12px',
-    color: '#999',
-  },
-  cardList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '10px',
-  },
-  smallBtn: {
-    background: 'white',
-    border: '1px solid #ccc',
-    color: '#555',
-    padding: '5px 12px',
-    borderRadius: '6px',
-    fontSize: '13px',
+    fontWeight: '600',
     cursor: 'pointer',
-  },
-  smallDangerBtn: {
-    background: 'white',
-    border: '1px solid #f0b4b4',
-    color: '#c62828',
-    padding: '5px 12px',
-    borderRadius: '6px',
-    fontSize: '13px',
-    cursor: 'pointer',
+    marginTop: '8px',
   },
 };
 
-export default PortfolioManager;
+export default Profile;
