@@ -1,176 +1,427 @@
 import { useState } from 'react';
+import axios from '../api/axios';
+import ShowcaseCard from './ShowcaseCard';
 
-const TYPE_META = {
-  project: { icon: '🛠️', label: 'Project' },
-  certificate: { icon: '🎓', label: 'Certificate' },
-  portfolio: { icon: '🎨', label: 'Portfolio' },
+const EMPTY_FORM = {
+  skill: '',
+  type: 'project',
+  title: '',
+  url: '',
+  description: '',
+  credential: '',
 };
 
-const getHostname = (url) => {
+// Same rule as the backend: only real http(s) addresses
+const isValidHttpUrl = (value) => {
   try {
-    return new URL(url).hostname.replace(/^www\./, '');
+    const url = new URL(value.trim());
+    return ['http:', 'https:'].includes(url.protocol) && url.hostname.includes('.');
   } catch {
-    return '';
+    return false;
   }
 };
 
-// Short, readable preview of the link, e.g. github.com/chintan16-bhatt/SkillSwap
-const getPreviewText = (url) => {
-  try {
-    const u = new URL(url);
-    const text = u.hostname.replace(/^www\./, '') + (u.pathname !== '/' ? u.pathname : '');
-    return text.length > 45 ? `${text.slice(0, 42)}...` : text;
-  } catch {
-    return url;
-  }
-};
+const PortfolioManager = ({ skills, items, onItemsChange }) => {
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [editingId, setEditingId] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
 
-const ShowcaseCard = ({ item, actions }) => {
-  const [open, setOpen] = useState(false);
+  const handleChange = (e) => {
+    setForm({ ...form, [e.target.name]: e.target.value });
+    setError('');
+    setSuccess('');
+  };
 
-  const meta = TYPE_META[item.type] || TYPE_META.project;
-  const isGithub = getHostname(item.url) === 'github.com';
-  const hasDetails = Boolean(item.description || item.credential);
-  // Extra safety: only render a clickable link for real http(s) addresses
-  const safeLink = /^https?:\/\//i.test(item.url);
+  const resetForm = () => {
+    setForm(EMPTY_FORM);
+    setEditingId(null);
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    if (!editingId && !form.skill) {
+      return setError('Choose the skill this work sample belongs to');
+    }
+    if (!form.title.trim()) {
+      return setError('Add a title for this work sample');
+    }
+    if (!isValidHttpUrl(form.url)) {
+      return setError('Enter a valid web address starting with http:// or https://');
+    }
+
+    setSaving(true);
+    try {
+      let data;
+      if (editingId) {
+        const { skill, ...updates } = form; // skill can't change when editing
+        ({ data } = await axios.put(`/users/portfolio/${editingId}`, updates));
+      } else {
+        ({ data } = await axios.post('/users/portfolio', form));
+      }
+      onItemsChange(data.portfolio);
+      setSuccess(editingId ? 'Work sample updated' : 'Work sample added');
+      resetForm();
+    } catch (err) {
+      setError(err.response?.data?.message || 'Could not save this work sample. Try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleEdit = (item) => {
+    setForm({
+      skill: item.skill,
+      type: item.type,
+      title: item.title,
+      url: item.url,
+      description: item.description || '',
+      credential: item.credential || '',
+    });
+    setEditingId(item._id);
+    setError('');
+    setSuccess('');
+  };
+
+  const handleDelete = async (item) => {
+    if (!window.confirm(`Remove "${item.title}" from your showcase?`)) return;
+    setError('');
+    setSuccess('');
+    try {
+      const { data } = await axios.delete(`/users/portfolio/${item._id}`);
+      onItemsChange(data.portfolio);
+      if (editingId === item._id) resetForm();
+      setSuccess('Work sample removed');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Could not remove this work sample. Try again.');
+    }
+  };
+
+  const itemsForSkill = (skill) =>
+    items.filter((i) => i.skill.toLowerCase() === skill.toLowerCase());
 
   return (
     <div style={styles.card}>
-      <div style={styles.topRow}>
-        <span style={styles.icon}>{isGithub ? '🐙' : meta.icon}</span>
-        <div style={styles.titleBox}>
-          <h4 style={styles.title}>{item.title}</h4>
-          <p style={styles.preview}>🔗 {getPreviewText(item.url)}</p>
-        </div>
-        <span style={styles.typePill}>{meta.label}</span>
-      </div>
+      <h2 style={styles.heading}>Portfolio and work showcase</h2>
+      <p style={styles.subheading}>
+        Link real work for each skill you offer. Profiles with work samples appear first in
+        search and get a showcase badge.
+      </p>
 
-      {open && hasDetails && (
-        <div style={styles.details}>
-          {item.description && <p style={styles.description}>{item.description}</p>}
-          {item.credential && (
-            <p style={styles.credential}>🏷️ Credential: {item.credential}</p>
-          )}
+      {error && <div style={styles.error}>{error}</div>}
+      {success && <div style={styles.success}>✅ {success}</div>}
+
+      {skills.length === 0 ? (
+        <div style={styles.info}>
+          Add skills under "Skills you offer" and save your profile. Then you can attach work
+          samples to each one here.
         </div>
+      ) : (
+        <form onSubmit={handleSubmit} style={styles.form}>
+          <div style={styles.row}>
+            <div style={styles.field}>
+              <label style={styles.label}>Skill</label>
+              <select
+                name="skill"
+                value={form.skill}
+                onChange={handleChange}
+                style={styles.input}
+                disabled={Boolean(editingId)}
+              >
+                <option value="">Choose a skill</option>
+                {skills.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={styles.field}>
+              <label style={styles.label}>Type</label>
+              <select name="type" value={form.type} onChange={handleChange} style={styles.input}>
+                <option value="project">Project</option>
+                <option value="certificate">Certificate</option>
+                <option value="portfolio">Portfolio</option>
+              </select>
+            </div>
+          </div>
+
+          <div style={styles.field}>
+            <label style={styles.label}>Title</label>
+            <input
+              type="text"
+              name="title"
+              value={form.title}
+              onChange={handleChange}
+              placeholder="e.g. SkillSwap, AI skill-exchange app"
+              maxLength={100}
+              style={styles.input}
+            />
+          </div>
+
+          <div style={styles.field}>
+            <label style={styles.label}>Link</label>
+            <input
+              type="text"
+              inputMode="url"
+              name="url"
+              value={form.url}
+              onChange={handleChange}
+              placeholder="https://github.com/your-name/your-project"
+              maxLength={500}
+              style={styles.input}
+            />
+          </div>
+
+          <div style={styles.field}>
+            <label style={styles.label}>Description (optional)</label>
+            <textarea
+              name="description"
+              value={form.description}
+              onChange={handleChange}
+              placeholder="What did you build or achieve? What should a learner know?"
+              maxLength={500}
+              rows={3}
+              style={{ ...styles.input, resize: 'vertical', fontFamily: 'inherit' }}
+            />
+          </div>
+
+          <div style={styles.field}>
+            <label style={styles.label}>Credential (optional)</label>
+            <input
+              type="text"
+              name="credential"
+              value={form.credential}
+              onChange={handleChange}
+              placeholder="e.g. Meta Front-End Developer Certificate, 2025"
+              maxLength={150}
+              style={styles.input}
+            />
+          </div>
+
+          <div style={styles.buttonRow}>
+            <button type="submit" style={styles.primaryBtn} disabled={saving}>
+              {saving ? 'Saving...' : editingId ? 'Save changes' : 'Add work sample'}
+            </button>
+            {editingId && (
+              <button type="button" style={styles.secondaryBtn} onClick={resetForm}>
+                Cancel edit
+              </button>
+            )}
+          </div>
+        </form>
       )}
 
-      <div style={styles.footer}>
-        {hasDetails ? (
-          <button type="button" style={styles.detailsBtn} onClick={() => setOpen(!open)}>
-            {open ? 'Hide details ▴' : 'Show details ▾'}
-          </button>
-        ) : (
-          <span />
-        )}
+      {skills.length > 0 && (
+        <div style={styles.groups}>
+          {skills.map((skill) => {
+            const list = itemsForSkill(skill);
+            return (
+              <div key={skill} style={styles.group}>
+                <div style={styles.groupHeader}>
+                  <h3 style={styles.groupTitle}>{skill}</h3>
+                  {list.length > 0 ? (
+                    <span style={styles.badge}>🏅 Showcase · {list.length}</span>
+                  ) : (
+                    <span style={styles.noEvidence}>No work samples yet</span>
+                  )}
+                </div>
 
-        <div style={styles.footerRight}>
-          {actions}
-          {safeLink && (
-            <a
-              href={item.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={styles.openBtn}
-            >
-              Open link ↗
-            </a>
-          )}
+                <div style={styles.cardList}>
+                  {list.map((item) => (
+                    <ShowcaseCard
+                      key={item._id}
+                      item={item}
+                      actions={
+                        <>
+                          <button
+                            type="button"
+                            style={styles.smallBtn}
+                            onClick={() => handleEdit(item)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            style={styles.smallDangerBtn}
+                            onClick={() => handleDelete(item)}
+                          >
+                            Remove
+                          </button>
+                        </>
+                      }
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
-      </div>
+      )}
     </div>
   );
 };
 
 const styles = {
   card: {
-    backgroundColor: '#fafaff',
-    border: '1px solid #e3e1ff',
-    borderRadius: '10px',
-    padding: '14px 16px',
+    backgroundColor: 'white',
+    borderRadius: '12px',
+    padding: '32px',
+    boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
+    marginTop: '24px',
   },
-  topRow: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: '12px',
-  },
-  icon: {
-    fontSize: '22px',
-    lineHeight: 1.2,
-  },
-  titleBox: {
-    flex: 1,
-    minWidth: 0,
-  },
-  title: {
-    fontSize: '15px',
-    fontWeight: '700',
+  heading: {
+    fontSize: '20px',
+    fontWeight: 'bold',
     color: '#333',
-    marginBottom: '2px',
-    wordBreak: 'break-word',
-  },
-  preview: {
-    fontSize: '12px',
-    color: '#777',
-    wordBreak: 'break-all',
-  },
-  typePill: {
-    fontSize: '11px',
-    fontWeight: '600',
-    color: '#6c63ff',
-    backgroundColor: '#ecebff',
-    padding: '3px 10px',
-    borderRadius: '20px',
-    whiteSpace: 'nowrap',
-  },
-  details: {
-    marginTop: '12px',
-    paddingTop: '12px',
-    borderTop: '1px dashed #dcdaf5',
-  },
-  description: {
-    fontSize: '13px',
-    color: '#555',
-    lineHeight: 1.6,
     marginBottom: '6px',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
   },
-  credential: {
-    fontSize: '13px',
+  subheading: {
+    fontSize: '14px',
+    color: '#777',
+    lineHeight: 1.5,
+    marginBottom: '20px',
+  },
+  error: {
+    backgroundColor: '#ffe0e0',
+    color: '#d00',
+    padding: '10px',
+    borderRadius: '8px',
+    marginBottom: '16px',
+    fontSize: '14px',
+  },
+  success: {
+    backgroundColor: '#e8f5e9',
     color: '#2e7d32',
-    fontWeight: '600',
+    padding: '10px',
+    borderRadius: '8px',
+    marginBottom: '16px',
+    fontSize: '14px',
   },
-  footer: {
+  info: {
+    backgroundColor: '#f0effe',
+    color: '#4b44c9',
+    padding: '14px',
+    borderRadius: '8px',
+    fontSize: '14px',
+    lineHeight: 1.5,
+  },
+  form: {
+    marginBottom: '8px',
+  },
+  row: {
     display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: '8px',
-    flexWrap: 'wrap',
-    marginTop: '12px',
-  },
-  detailsBtn: {
-    background: 'none',
-    border: 'none',
-    color: '#6c63ff',
-    fontSize: '13px',
-    fontWeight: '600',
-    cursor: 'pointer',
-    padding: 0,
-  },
-  footerRight: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
+    gap: '12px',
     flexWrap: 'wrap',
   },
-  openBtn: {
+  field: {
+    flex: 1,
+    minWidth: '160px',
+    marginBottom: '16px',
+  },
+  label: {
+    display: 'block',
+    marginBottom: '6px',
+    fontWeight: '600',
+    fontSize: '14px',
+    color: '#333',
+  },
+  input: {
+    width: '100%',
+    padding: '11px 12px',
+    borderRadius: '8px',
+    border: '1px solid #ddd',
+    fontSize: '14px',
+    boxSizing: 'border-box',
+    backgroundColor: 'white',
+  },
+  buttonRow: {
+    display: 'flex',
+    gap: '10px',
+    flexWrap: 'wrap',
+  },
+  primaryBtn: {
+    padding: '12px 24px',
     backgroundColor: '#6c63ff',
     color: 'white',
-    padding: '6px 14px',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '15px',
+    fontWeight: '600',
+    cursor: 'pointer',
+  },
+  secondaryBtn: {
+    padding: '12px 24px',
+    backgroundColor: 'transparent',
+    color: '#6c63ff',
+    border: '1px solid #6c63ff',
+    borderRadius: '8px',
+    fontSize: '15px',
+    fontWeight: '600',
+    cursor: 'pointer',
+  },
+  groups: {
+    marginTop: '24px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '20px',
+  },
+  group: {
+    borderTop: '1px solid #f0f0f0',
+    paddingTop: '16px',
+  },
+  groupHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    flexWrap: 'wrap',
+    marginBottom: '10px',
+  },
+  groupTitle: {
+    fontSize: '16px',
+    fontWeight: '700',
+    color: '#333',
+  },
+  badge: {
+    backgroundColor: '#fff4d6',
+    color: '#8a5a00',
+    fontSize: '12px',
+    fontWeight: '700',
+    padding: '3px 10px',
+    borderRadius: '20px',
+  },
+  noEvidence: {
+    fontSize: '12px',
+    color: '#999',
+  },
+  cardList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  smallBtn: {
+    background: 'white',
+    border: '1px solid #ccc',
+    color: '#555',
+    padding: '5px 12px',
     borderRadius: '6px',
     fontSize: '13px',
-    fontWeight: '600',
+    cursor: 'pointer',
+  },
+  smallDangerBtn: {
+    background: 'white',
+    border: '1px solid #f0b4b4',
+    color: '#c62828',
+    padding: '5px 12px',
+    borderRadius: '6px',
+    fontSize: '13px',
+    cursor: 'pointer',
   },
 };
 
-export default ShowcaseCard;
+export default PortfolioManager;
